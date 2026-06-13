@@ -90,6 +90,20 @@ router.post('/', (req, res) => {
     ...req.body,
     createdAt: new Date().toISOString()
   };
+
+  if (!newCheckin.planId && newCheckin.userId && newCheckin.instrument) {
+    const now = new Date(newCheckin.createdAt);
+    const matchedPlan = plans.find(p =>
+      p.userId === newCheckin.userId &&
+      p.instrument === newCheckin.instrument &&
+      p.status === 'in_progress' &&
+      now >= new Date(p.startDate) &&
+      now <= new Date(p.deadline + 'T23:59:59')
+    );
+    if (matchedPlan) {
+      newCheckin.planId = matchedPlan.id;
+    }
+  }
   
   checkins.push(newCheckin);
   writeJSON('checkins.json', checkins);
@@ -98,12 +112,7 @@ router.post('/', (req, res) => {
     const planIdx = plans.findIndex(p => p.id === newCheckin.planId);
     if (planIdx !== -1) {
       const plan = plans[planIdx];
-      const planCheckins = checkins.filter(c =>
-        c.userId === plan.userId &&
-        c.instrument === plan.instrument &&
-        new Date(c.createdAt) >= new Date(plan.startDate) &&
-        new Date(c.createdAt) <= new Date(plan.deadline)
-      );
+      const planCheckins = checkins.filter(c => c.planId === plan.id);
       const checkinDates = new Set(
         planCheckins.map(c => new Date(c.createdAt).toDateString())
       );

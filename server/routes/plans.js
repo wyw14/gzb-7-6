@@ -4,6 +4,56 @@ const { readJSON, writeJSON } = require('../utils/storage');
 
 const router = express.Router();
 
+function getPlanCheckins(checkins, planId) {
+  return checkins.filter(c => c.planId === planId);
+}
+
+function calculatePlanProgress(plan, checkins) {
+  const planCheckins = getPlanCheckins(checkins, plan.id);
+
+  const checkinDates = new Set(
+    planCheckins.map(c => new Date(c.createdAt).toDateString())
+  );
+
+  const completedDays = checkinDates.size;
+  const completedMinutes = planCheckins.reduce((sum, c) => sum + (c.duration || 0), 0);
+  const completedHours = Math.round(completedMinutes / 60 * 10) / 10;
+
+  const progressDays = Math.min(100, Math.round(completedDays / plan.targetDays * 100));
+  const progressHours = Math.min(100, Math.round(completedMinutes / (plan.targetHours * 60) * 100));
+  const overallProgress = Math.round((progressDays + progressHours) / 2);
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const deadline = new Date(plan.deadline);
+  deadline.setHours(0, 0, 0, 0);
+  const daysRemaining = Math.ceil((deadline - today) / (1000 * 60 * 60 * 24));
+
+  let currentStatus = plan.status;
+  if (plan.status !== 'completed') {
+    if (completedDays >= plan.targetDays && completedHours >= plan.targetHours) {
+      currentStatus = 'completed';
+    } else if (daysRemaining < 0) {
+      currentStatus = 'expired';
+    } else {
+      currentStatus = 'in_progress';
+    }
+  }
+
+  return {
+    ...plan,
+    completedDays,
+    completedHours,
+    completedMinutes,
+    progressDays,
+    progressHours,
+    overallProgress,
+    daysRemaining,
+    currentStatus,
+    relatedCheckins: planCheckins.length
+  };
+}
+
 router.get('/', (req, res) => {
   const plans = readJSON('plans.json', []);
   const checkins = readJSON('checkins.json', []);
@@ -20,56 +70,7 @@ router.get('/', (req, res) => {
 
   result.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
-  const enriched = result.map(plan => {
-    const planCheckins = checkins.filter(c =>
-      c.userId === plan.userId &&
-      c.instrument === plan.instrument &&
-      new Date(c.createdAt) >= new Date(plan.startDate) &&
-      new Date(c.createdAt) <= new Date(plan.deadline)
-    );
-
-    const checkinDates = new Set(
-      planCheckins.map(c => new Date(c.createdAt).toDateString())
-    );
-
-    const completedDays = checkinDates.size;
-    const completedMinutes = planCheckins.reduce((sum, c) => sum + (c.duration || 0), 0);
-    const completedHours = Math.round(completedMinutes / 60 * 10) / 10;
-
-    const progressDays = Math.min(100, Math.round(completedDays / plan.targetDays * 100));
-    const progressHours = Math.min(100, Math.round(completedMinutes / (plan.targetHours * 60) * 100));
-    const overallProgress = Math.round((progressDays + progressHours) / 2);
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const deadline = new Date(plan.deadline);
-    deadline.setHours(0, 0, 0, 0);
-    const daysRemaining = Math.ceil((deadline - today) / (1000 * 60 * 60 * 24));
-
-    let currentStatus = plan.status;
-    if (plan.status !== 'completed') {
-      if (completedDays >= plan.targetDays && completedHours >= plan.targetHours) {
-        currentStatus = 'completed';
-      } else if (daysRemaining < 0) {
-        currentStatus = 'expired';
-      } else {
-        currentStatus = 'in_progress';
-      }
-    }
-
-    return {
-      ...plan,
-      completedDays,
-      completedHours,
-      completedMinutes,
-      progressDays,
-      progressHours,
-      overallProgress,
-      daysRemaining,
-      currentStatus,
-      relatedCheckins: planCheckins.length
-    };
-  });
+  const enriched = result.map(plan => calculatePlanProgress(plan, checkins));
 
   res.json(enriched);
 });
@@ -143,12 +144,7 @@ router.get('/summary/:userId', (req, res) => {
   today.setHours(0, 0, 0, 0);
 
   userPlans.forEach(plan => {
-    const planCheckins = checkins.filter(c =>
-      c.userId === plan.userId &&
-      c.instrument === plan.instrument &&
-      new Date(c.createdAt) >= new Date(plan.startDate) &&
-      new Date(c.createdAt) <= new Date(plan.deadline)
-    );
+    const planCheckins = getPlanCheckins(checkins, plan.id);
 
     const checkinDates = new Set(
       planCheckins.map(c => new Date(c.createdAt).toDateString())
@@ -175,12 +171,7 @@ router.get('/summary/:userId', (req, res) => {
   });
 
   const urgentPlans = userPlans.filter(plan => {
-    const planCheckins = checkins.filter(c =>
-      c.userId === plan.userId &&
-      c.instrument === plan.instrument &&
-      new Date(c.createdAt) >= new Date(plan.startDate) &&
-      new Date(c.createdAt) <= new Date(plan.deadline)
-    );
+    const planCheckins = getPlanCheckins(checkins, plan.id);
 
     const checkinDates = new Set(
       planCheckins.map(c => new Date(c.createdAt).toDateString())
@@ -197,40 +188,7 @@ router.get('/summary/:userId', (req, res) => {
     const isComplete = completedDays >= plan.targetDays && completedHours >= plan.targetHours;
 
     return !isComplete && daysRemaining >= 0 && daysRemaining <= 3;
-  }).map(plan => {
-    const planCheckins = checkins.filter(c =>
-      c.userId === plan.userId &&
-      c.instrument === plan.instrument &&
-      new Date(c.createdAt) >= new Date(plan.startDate) &&
-      new Date(c.createdAt) <= new Date(plan.deadline)
-    );
-
-    const checkinDates = new Set(
-      planCheckins.map(c => new Date(c.createdAt).toDateString())
-    );
-
-    const completedDays = checkinDates.size;
-    const completedMinutes = planCheckins.reduce((sum, c) => sum + (c.duration || 0), 0);
-    const completedHours = Math.round(completedMinutes / 60 * 10) / 10;
-
-    const deadline = new Date(plan.deadline);
-    deadline.setHours(0, 0, 0, 0);
-    const daysRemaining = Math.ceil((deadline - today) / (1000 * 60 * 60 * 24));
-
-    const progressDays = Math.min(100, Math.round(completedDays / plan.targetDays * 100));
-    const progressHours = Math.min(100, Math.round(completedMinutes / (plan.targetHours * 60) * 100));
-    const overallProgress = Math.round((progressDays + progressHours) / 2);
-
-    return {
-      ...plan,
-      completedDays,
-      completedHours,
-      progressDays,
-      progressHours,
-      overallProgress,
-      daysRemaining
-    };
-  });
+  }).map(plan => calculatePlanProgress(plan, checkins));
 
   res.json({
     userId,
