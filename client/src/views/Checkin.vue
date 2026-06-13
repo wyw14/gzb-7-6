@@ -48,13 +48,44 @@
               </div>
             </div>
           </div>
+
+          <div class="card mb-20" v-if="activePlans.length">
+            <h3><el-icon><Calendar /></el-icon> 进行中的练习计划</h3>
+            <div class="active-plan-list">
+              <div v-for="plan in activePlans" :key="plan.id" class="active-plan-item" :class="{ selected: form.planId === plan.id }" @click="selectPlan(plan)">
+                <div class="active-plan-head">
+                  <span class="active-plan-inst">{{ plan.instrument }}</span>
+                  <span class="badge" :class="plan.daysRemaining <= 1 ? 'badge-danger' : plan.daysRemaining <= 3 ? 'badge-warning' : 'badge-primary'">
+                    {{ plan.daysRemaining === 0 ? '今天截止' : plan.daysRemaining + ' 天' }}
+                  </span>
+                </div>
+                <div v-if="plan.piece" class="active-plan-piece">《{{ plan.piece }}》</div>
+                <div class="active-plan-progress">
+                  <el-progress :percentage="plan.overallProgress" :stroke-width="6" />
+                </div>
+                <div class="active-plan-meta">
+                  {{ plan.completedDays }}/{{ plan.targetDays }}天 · {{ plan.completedHours }}/{{ plan.targetHours }}h
+                </div>
+              </div>
+            </div>
+          </div>
           
           <div class="checkin-form card">
             <h3><el-icon><Edit /></el-icon> 今日打卡</h3>
             <el-form :model="form" label-width="80px" @submit.prevent>
               <el-form-item label="练习乐器" required>
-                <el-select v-model="form.instrument" placeholder="选择乐器" style="width: 100%">
+                <el-select v-model="form.instrument" placeholder="选择乐器" style="width: 100%" @change="onInstrumentChange">
                   <el-option v-for="inst in instrumentOptions" :key="inst" :label="inst" :value="inst" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="关联计划">
+                <el-select v-model="form.planId" placeholder="可选择关联练习计划" clearable style="width: 100%">
+                  <el-option
+                    v-for="plan in matchingPlans"
+                    :key="plan.id"
+                    :label="`${plan.instrument}${plan.piece ? ' - ' + plan.piece : ''} (剩${plan.daysRemaining}天)`"
+                    :value="plan.id"
+                  />
                 </el-select>
               </el-form-item>
               <el-form-item label="练习曲目">
@@ -103,12 +134,12 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useUserStore } from '../stores/user'
-import { checkinApi, recommendApi } from '../api'
+import { checkinApi, recommendApi, planApi } from '../api'
 import CheckinCard from '../components/CheckinCard.vue'
 import { ElMessage } from 'element-plus'
-import { Trophy, Document, Timer, PieChart, Edit, SuccessFilled, Promotion } from '@element-plus/icons-vue'
+import { Trophy, Document, Timer, PieChart, Edit, SuccessFilled, Promotion, Calendar } from '@element-plus/icons-vue'
 
 const userStore = useUserStore()
 
@@ -117,6 +148,7 @@ const feedFilter = ref('all')
 const myCheckins = ref([])
 const allCheckins = ref([])
 const submitting = ref(false)
+const myPlans = ref([])
 
 const form = reactive({
   userId: userStore.userId,
@@ -124,7 +156,8 @@ const form = reactive({
   piece: '',
   duration: 60,
   notes: '',
-  photo: ''
+  photo: '',
+  planId: ''
 })
 
 const instrumentOptions = computed(() => {
@@ -142,6 +175,15 @@ const maxMinutes = computed(() => {
 const filteredFeed = computed(() => {
   if (feedFilter.value === 'mine') return myCheckins.value
   return allCheckins.value
+})
+
+const activePlans = computed(() => {
+  return myPlans.value.filter(p => p.currentStatus === 'in_progress')
+})
+
+const matchingPlans = computed(() => {
+  if (!form.instrument) return activePlans.value
+  return activePlans.value.filter(p => p.instrument === form.instrument)
 })
 
 onMounted(async () => {
@@ -163,6 +205,32 @@ const loadData = async () => {
   try {
     allCheckins.value = await checkinApi.list()
   } catch (e) {}
+  try {
+    myPlans.value = await planApi.list({ userId: userStore.userId })
+  } catch (e) {}
+}
+
+const onInstrumentChange = (val) => {
+  if (form.planId) {
+    const plan = myPlans.value.find(p => p.id === form.planId)
+    if (plan && plan.instrument !== val) {
+      form.planId = ''
+    }
+  }
+  if (!form.piece) {
+    const match = matchingPlans.value[0]
+    if (match && match.piece) {
+      form.piece = match.piece
+    }
+  }
+}
+
+const selectPlan = (plan) => {
+  form.planId = plan.id
+  form.instrument = plan.instrument
+  if (plan.piece) {
+    form.piece = plan.piece
+  }
 }
 
 const submit = async () => {
@@ -172,11 +240,19 @@ const submit = async () => {
   }
   submitting.value = true
   try {
-    const result = await checkinApi.create({ ...form })
+    const payload = { ...form }
+    if (!payload.planId) delete payload.planId
+    const result = await checkinApi.create(payload)
     if (result.success) {
-      ElMessage.success('打卡成功！继续加油 🎉')
+      const plan = myPlans.value.find(p => p.id === form.planId)
+      if (plan) {
+        ElMessage.success(`打卡成功！「${plan.instrument}${plan.piece ? ' - ' + plan.piece : ''}」计划进度已更新 🎉`)
+      } else {
+        ElMessage.success('打卡成功！继续加油 🎉')
+      }
       form.notes = ''
       form.piece = ''
+      form.planId = ''
       form.duration = 60
       await loadData()
     }
@@ -275,6 +351,59 @@ const submit = async () => {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.active-plan-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.active-plan-item {
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 2px solid var(--border-color);
+  cursor: pointer;
+  transition: all 0.2s;
+  background: white;
+}
+
+.active-plan-item:hover {
+  border-color: var(--primary-light);
+  background: #eef2ff;
+}
+
+.active-plan-item.selected {
+  border-color: var(--primary-color);
+  background: #eef2ff;
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.15);
+}
+
+.active-plan-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.active-plan-inst {
+  font-weight: 600;
+  color: var(--primary-color);
+}
+
+.active-plan-piece {
+  font-size: 13px;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+
+.active-plan-progress {
+  margin-bottom: 4px;
+}
+
+.active-plan-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 @media (max-width: 900px) {

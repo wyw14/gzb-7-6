@@ -83,6 +83,7 @@ function calculateStreak(checkins) {
 
 router.post('/', (req, res) => {
   const checkins = readJSON('checkins.json', []);
+  const plans = readJSON('plans.json', []);
   
   const newCheckin = {
     id: 'c' + uuidv4().slice(0, 8),
@@ -92,6 +93,30 @@ router.post('/', (req, res) => {
   
   checkins.push(newCheckin);
   writeJSON('checkins.json', checkins);
+
+  if (newCheckin.planId) {
+    const planIdx = plans.findIndex(p => p.id === newCheckin.planId);
+    if (planIdx !== -1) {
+      const plan = plans[planIdx];
+      const planCheckins = checkins.filter(c =>
+        c.userId === plan.userId &&
+        c.instrument === plan.instrument &&
+        new Date(c.createdAt) >= new Date(plan.startDate) &&
+        new Date(c.createdAt) <= new Date(plan.deadline)
+      );
+      const checkinDates = new Set(
+        planCheckins.map(c => new Date(c.createdAt).toDateString())
+      );
+      const completedDays = checkinDates.size;
+      const completedMinutes = planCheckins.reduce((sum, c) => sum + (c.duration || 0), 0);
+      const completedHours = completedMinutes / 60;
+
+      if (completedDays >= plan.targetDays && completedHours >= plan.targetHours) {
+        plans[planIdx].status = 'completed';
+        writeJSON('plans.json', plans);
+      }
+    }
+  }
   
   res.json({ success: true, checkin: newCheckin });
 });
